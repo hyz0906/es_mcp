@@ -71,7 +71,7 @@ llm = ChatOpenAI(
     model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
     temperature=0,
     base_url="https://api.siliconflow.cn/v1",
-    api_key=os.getenv("SILICONFLOW_API_KEY", "sk-nxqwrgokpnojffswpuxqsedbwctlfpujlzqfzronnpqdnlqy")
+    api_key=os.getenv("SILICONFLOW_API_KEY", "sk-xxx")
 )
 
 # Initialize the MCP client
