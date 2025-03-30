@@ -97,7 +97,7 @@ llm = ChatOpenAI(
     model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
     temperature=0,
     base_url="https://api.siliconflow.cn/v1",
-    api_key=os.getenv("SILICONFLOW_API_KEY", "sk-xxx")
+    api_key=os.getenv("SILICONFLOW_API_KEY", "sk-nxqwrgokpnojffswpuxqsedbwctlfpujlzqfzronnpqdnlqy")
 )
 
 # Initialize MCP client and get tools
@@ -430,11 +430,4 @@ def interactive_session():
                 print(f"\nCurrent task: {state.current_task}")
 
 if __name__ == "__main__":
-<<<<<<< HEAD
-    # Example usage
-    query = "What indices are available in Elasticsearch?"
-    response = process_query(query)
-    print(response)
-=======
     interactive_session()
->>>>>>> c7a733a (get tools and  multi step with human in loop)

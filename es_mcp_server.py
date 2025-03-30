@@ -1,6 +1,9 @@
-from fastmcp import FastMCP
-from elasticsearch import Elasticsearch
+import socket
+import pickle
 import os
+from elasticsearch import Elasticsearch
+from typing import Dict, Any
+import threading
 
 class ElasticsearchTool:
     """Tool for interacting with Elasticsearch"""
@@ -77,110 +80,142 @@ class ElasticsearchTool:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-class ElasticsearchMCP(FastMCP):
-    def __init__(self):
-        super().__init__()
+class MCPServer:
+    def __init__(self, host="0.0.0.0", port=8000):
+        self.host = host
+        self.port = port
         self.es_tool = ElasticsearchTool()
-        self.tools = {}  # Initialize empty tools dictionary
-        
-        # Register all tools
-        self.register_tool(
-            "health",
-            "Check Elasticsearch cluster health",
-            {},
-            self.es_tool.health
-        )
-        
-        self.register_tool(
-            "indices",
-            "List all indices in Elasticsearch",
-            {},
-            self.es_tool.indices
-        )
-        
-        self.register_tool(
-            "search",
-            "Search for documents in an index",
-            {
-                "index": "Name of the index to search",
-                "query": "Search query in Elasticsearch DSL format",
-                "size": "Number of results to return (default: 100)",
-                "from": "Starting offset for pagination",
-                "sort": "Sort criteria"
-            },
-            lambda params: self.es_tool.search(
-                index=params.get('index'),
-                query=params.get('query'),
-                size=params.get('size', 100),
-                from_param=params.get('from', 0),
-                sort=params.get('sort')
-            )
-        )
-        
-        self.register_tool(
-            "document",
-            "Get a specific document by ID",
-            {
-                "index": "Name of the index",
-                "id": "Document ID"
-            },
-            lambda params: self.es_tool.document(
-                index=params.get('index'),
-                doc_id=params.get('id')
-            )
-        )
-        
-        self.register_tool(
-            "mapping",
-            "Get the mapping for an index",
-            {
-                "index": "Name of the index"
-            },
-            lambda params: self.es_tool.mapping(
-                index=params.get('index')
-            )
-        )
-        
-        # Register the list_tools command
-        self.register_tool(
-            "list_tools",
-            "Get list of available tools and their descriptions",
-            {},
-            lambda _: {"available_tools": self.tools}
-        )
+        self.tools = self.register_tools()
+        self.server_socket = None
 
-    def register_tool(self, name: str, description: str, parameters: dict, handler: callable):
-        """Register a new tool with the MCP server"""
-        self.tools[name] = {
-            "description": description,
-            "parameters": parameters,
-            "handler": handler
+    def register_tools(self) -> Dict[str, Dict[str, Any]]:
+        """Register all available tools"""
+        return {
+            "health": {
+                "description": "Check Elasticsearch cluster health",
+                "parameters": {},
+                "handler": self.es_tool.health
+            },
+            "indices": {
+                "description": "List all indices in Elasticsearch",
+                "parameters": {},
+                "handler": self.es_tool.indices
+            },
+            "search": {
+                "description": "Search for documents in an index",
+                "parameters": {
+                    "index": "Name of the index to search",
+                    "query": "Search query in Elasticsearch DSL format",
+                    "size": "Number of results to return (default: 100)",
+                    "from": "Starting offset for pagination",
+                    "sort": "Sort criteria"
+                },
+                "handler": self.es_tool.search
+            },
+            "document": {
+                "description": "Get a specific document by ID",
+                "parameters": {
+                    "index": "Name of the index",
+                    "id": "Document ID"
+                },
+                "handler": self.es_tool.document
+            },
+            "mapping": {
+                "description": "Get the mapping for an index",
+                "parameters": {
+                    "index": "Name of the index"
+                },
+                "handler": self.es_tool.mapping
+            },
+            "list_tools": {
+                "description": "Get list of available tools and their descriptions",
+                "parameters": {},
+                "handler": lambda: {"available_tools": {
+                    name: {k: v for k, v in info.items() if k != 'handler'}
+                    for name, info in self.tools.items()
+                }}
+            }
         }
 
-    def handle_request(self, command: str, params: dict) -> dict:
-        """Handle incoming MCP requests"""
-        tool = self.tools.get(command)
-        if tool:
+    def handle_client(self, client_socket: socket.socket, address: tuple):
+        """Handle individual client connection"""
+        try:
+            # Receive data
+            data = b''
+            while True:
+                chunk = client_socket.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                try:
+                    request = pickle.loads(data)
+                    break
+                except:
+                    continue
+
+            # Process request
+            command = request.get('command')
+            params = request.get('params', {})
+            
+            tool = self.tools.get(command)
+            if tool:
+                try:
+                    result = tool["handler"](**params)
+                    response = {"status": "ok", "data": result}
+                except Exception as e:
+                    response = {"status": "error", "message": str(e)}
+            else:
+                response = {
+                    "status": "error",
+                    "message": f"Unknown command: {command}",
+                    "available_tools": list(self.tools.keys())
+                }
+
+            # Send response
+            client_socket.sendall(pickle.dumps(response))
+
+        except Exception as e:
+            error_response = {"status": "error", "message": f"Server error: {str(e)}"}
             try:
-                result = tool["handler"](params)
-                return {"status": "ok", "data": result}
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-        else:
-            return {
-                "status": "error", 
-                "message": f"Unknown command: {command}",
-                "available_tools": list(self.tools.keys())
-            }
+                client_socket.sendall(pickle.dumps(error_response))
+            except:
+                pass
+        finally:
+            client_socket.close()
+
+    def run(self):
+        """Start the MCP server"""
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        try:
+            self.server_socket.bind((self.host, self.port))
+            self.server_socket.listen(5)
+            print(f"MCP Server listening on {self.host}:{self.port}")
+            
+            while True:
+                client_socket, address = self.server_socket.accept()
+                print(f"Accepted connection from {address}")
+                
+                # Handle each client in a separate thread
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, address)
+                )
+                client_thread.start()
+                
+        except KeyboardInterrupt:
+            print("\nShutting down server...")
+        finally:
+            if self.server_socket:
+                self.server_socket.close()
 
 def main():
     # Get port from environment or use default
     port = int(os.environ.get('PORT', 8000))
     
     # Create and start the MCP server
-    server = ElasticsearchMCP()
-    
-    print(f"Elasticsearch MCP server starting on port {port}")
+    server = MCPServer(port=port)
     server.run()
 
 if __name__ == "__main__":
