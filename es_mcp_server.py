@@ -81,33 +81,97 @@ class ElasticsearchMCP(FastMCP):
     def __init__(self):
         super().__init__()
         self.es_tool = ElasticsearchTool()
-
-    def handle_request(self, command: str, params: dict) -> dict:
-        """Handle incoming MCP requests"""
-        handlers = {
-            "health": lambda: self.es_tool.health(),
-            "indices": lambda: self.es_tool.indices(),
-            "search": lambda: self.es_tool.search(
+        self.tools = {}  # Initialize empty tools dictionary
+        
+        # Register all tools
+        self.register_tool(
+            "health",
+            "Check Elasticsearch cluster health",
+            {},
+            self.es_tool.health
+        )
+        
+        self.register_tool(
+            "indices",
+            "List all indices in Elasticsearch",
+            {},
+            self.es_tool.indices
+        )
+        
+        self.register_tool(
+            "search",
+            "Search for documents in an index",
+            {
+                "index": "Name of the index to search",
+                "query": "Search query in Elasticsearch DSL format",
+                "size": "Number of results to return (default: 100)",
+                "from": "Starting offset for pagination",
+                "sort": "Sort criteria"
+            },
+            lambda params: self.es_tool.search(
                 index=params.get('index'),
                 query=params.get('query'),
                 size=params.get('size', 100),
                 from_param=params.get('from', 0),
                 sort=params.get('sort')
-            ),
-            "document": lambda: self.es_tool.document(
+            )
+        )
+        
+        self.register_tool(
+            "document",
+            "Get a specific document by ID",
+            {
+                "index": "Name of the index",
+                "id": "Document ID"
+            },
+            lambda params: self.es_tool.document(
                 index=params.get('index'),
                 doc_id=params.get('id')
-            ),
-            "mapping": lambda: self.es_tool.mapping(
+            )
+        )
+        
+        self.register_tool(
+            "mapping",
+            "Get the mapping for an index",
+            {
+                "index": "Name of the index"
+            },
+            lambda params: self.es_tool.mapping(
                 index=params.get('index')
             )
+        )
+        
+        # Register the list_tools command
+        self.register_tool(
+            "list_tools",
+            "Get list of available tools and their descriptions",
+            {},
+            lambda _: {"available_tools": self.tools}
+        )
+
+    def register_tool(self, name: str, description: str, parameters: dict, handler: callable):
+        """Register a new tool with the MCP server"""
+        self.tools[name] = {
+            "description": description,
+            "parameters": parameters,
+            "handler": handler
         }
 
-        handler = handlers.get(command)
-        if handler:
-            return handler()
+    def handle_request(self, command: str, params: dict) -> dict:
+        """Handle incoming MCP requests"""
+        tool = self.tools.get(command)
+        if tool:
+            try:
+                result = tool["handler"](params)
+                return {"status": "ok", "data": result}
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
         else:
-            return {"status": "error", "message": f"Unknown command: {command}"}
+            return {
+                "status": "error", 
+                "message": f"Unknown command: {command}",
+                "available_tools": list(self.tools.keys())
+            }
 
 def main():
     # Get port from environment or use default
