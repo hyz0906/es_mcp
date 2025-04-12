@@ -362,18 +362,35 @@ def route(state: AgentState) -> Literal["analyze", "plan", "execute", "format", 
         return END
 
 def get_human_feedback(state: AgentState) -> AgentState:
-    """Get feedback from human on whether the result is satisfactory"""
-    print("\nIs this result satisfactory? (yes/no):")
-    feedback = input().strip().lower()
-    
-    if feedback == "yes":
+    """Automatically evaluate and handle feedback based on output quality"""
+    # Check if the answer contains indicators of success
+    if is_output_satisfactory(state):
+        print("\nElasticsearch Agent: The result looks good! Moving to next task.")
         state.task_status = "done"
-    else:
-        print("\nWhat would you like to know more about?")
-        state.query = input().strip()
-        state.task_status = "continue"
+        return state
     
+    # If not satisfactory, automatically generate a new plan
+    print("\nElasticsearch Agent: The result needs improvement. Let me try again...")
+    state.task_status = "continue"
     return state
+
+def is_output_satisfactory(state: AgentState) -> bool:
+    """Evaluate if the output is satisfactory based on content"""
+    # Check for common error indicators
+    error_indicators = [
+        "error", "not found", "failed", "unable", 
+        "no results", "empty", "invalid", "missing"
+    ]
+    
+    # Check if any error indicators are in the answer
+    if state.answer and any(indicator in state.answer.lower() for indicator in error_indicators):
+        return False
+    
+    # Check if the answer contains meaningful content
+    if state.answer and len(state.answer.strip()) > 10:  # Minimum length threshold
+        return True
+    
+    return False
 
 # Create the workflow
 workflow = StateGraph(AgentState)
@@ -389,8 +406,22 @@ workflow.add_node("human_feedback", get_human_feedback)
 workflow.add_edge("plan", "analyze")
 workflow.add_edge("analyze", "execute")
 workflow.add_edge("execute", "format")
-workflow.add_edge("format", route)
-workflow.add_edge("human_feedback", route)
+
+# Add conditional edge from format
+workflow.add_conditional_edges(
+    "format",
+    route,  # The routing function we already have
+    {
+        "analyze": "analyze",
+        "plan": "plan",
+        "execute": "execute",
+        "human_feedback": "human_feedback",
+        END: END
+    }
+)
+
+# Add edge from human_feedback to route
+# workflow.add_edge("human_feedback", route)
 
 # Set entry point
 workflow.set_entry_point("plan")
@@ -429,5 +460,44 @@ def interactive_session():
             if state.current_task:
                 print(f"\nCurrent task: {state.current_task}")
 
+def visualize_workflow(output_file="workflow.png"):
+    """Visualize the workflow as a PNG image"""
+    try:
+        from graphviz import Digraph
+        
+        # Create a new directed graph
+        dot = Digraph()
+        
+        # Add nodes
+        dot.node("plan", "Plan Task")
+        dot.node("analyze", "Analyze Query")
+        dot.node("execute", "Execute Command")
+        dot.node("format", "Format Response")
+        dot.node("human_feedback", "Human Feedback")
+        dot.node("end", "End")
+        
+        # Add edges
+        dot.edge("plan", "analyze")
+        dot.edge("analyze", "execute")
+        dot.edge("execute", "format")
+        
+        # Add conditional edges from format
+        dot.edge("format", "analyze", label="analyze")
+        dot.edge("format", "plan", label="plan")
+        dot.edge("format", "execute", label="execute")
+        dot.edge("format", "human_feedback", label="human_feedback")
+        dot.edge("format", "end", label="END")
+        
+        # Add edge from human_feedback
+        dot.edge("human_feedback", "format")
+        
+        # Render and save the graph
+        dot.render(output_file, format='png', cleanup=True)
+        print(f"Workflow visualization saved to {output_file}")
+        
+    except ImportError:
+        print("graphviz not installed. Please install it with: pip install graphviz")
+
 if __name__ == "__main__":
+    visualize_workflow()
     interactive_session()
